@@ -8,8 +8,9 @@ import (
 	"math"
 	"time"
 
-	"github.com/gardener/network-problem-detector/pkg/common/config"
 	"github.com/spf13/cobra"
+
+	"github.com/gardener/network-problem-detector/pkg/common/config"
 )
 
 type runnerArgs struct {
@@ -43,6 +44,7 @@ func GetNewRoot(ra *runnerArgs) *cobra.Command {
 	root.AddCommand(createCheckTCPPortCmd(ra))
 	root.AddCommand(createCheckHTTPSGetArgs(ra))
 	root.AddCommand(createNSLookupCmd(ra))
+	root.AddCommand(createTakeLeaseCmd(ra))
 	return root
 }
 

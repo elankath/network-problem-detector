@@ -18,7 +18,15 @@ import (
 	"sync"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/utils/ptr"
+
 	"github.com/fsnotify/fsnotify"
+	coordinationv1 "k8s.io/api/coordination/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	clientset "k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/clientcmd"
+
 	"github.com/gardener/network-problem-detector/pkg/agent/aggregation"
 	"github.com/gardener/network-problem-detector/pkg/agent/db"
 	"github.com/gardener/network-problem-detector/pkg/agent/runners"
@@ -453,10 +461,13 @@ func (s *server) run() {
 		log.Fatal(err)
 	}
 
+	//TODO: remove me after making me into a job
+	dwdticker := time.NewTicker(time.Minute)
 	for {
 		select {
 		case <-s.done:
 			ticker.Stop()
+			dwdticker.Stop()
 			s.stop()
 			return
 		case <-interrupt:
@@ -494,8 +505,88 @@ func (s *server) run() {
 			go s.reloadConfig()
 		case <-ticker.C:
 			s.triggerJobs()
+		case <-dwdticker.C:
+			//TODO: FIXME: TEMP CODE FOR TESTING. design and Stucture later
+			err := s.createOrUpdateLeaseOnShootApiServer()
+			if err != nil {
+				fmt.Printf("error in createOrUpdateLeaseOnShootApiServer: %s\n", err)
+			}
 		}
 	}
+}
+
+func (s *server) createOrUpdateLeaseOnShootApiServer() error {
+
+	cfg, err := clientcmd.BuildConfigFromFlags("", "")
+	if err != nil {
+		return err
+	}
+	cfg.UserAgent = fmt.Sprintf("%s/%s", "dwdagent", "0.1")
+	clientSet, err := clientset.NewForConfig(cfg)
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+	//podList, err := clientSet.CoreV1().Pods("kube-system").List(ctx, metav1.ListOptions{})
+	//if err != nil {
+	//	return err
+	//}
+	//fmt.Println("************BEGIN PodListing")
+	//for _, p := range podList.Items {
+	//	fmt.Printf("(createOrUpdateLeaseOnShootApiServer) FOUND pod: %s\n", p)
+	//}
+	//fmt.Println("************END PodListing")
+	leaseIf := clientSet.CoordinationV1().Leases("kube-system")
+
+	leaseList, err := leaseIf.List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return err
+	}
+	fmt.Println("************BEGIN LeaseListing")
+	for _, l := range leaseList.Items {
+		fmt.Printf("(createOrUpdateLeaseOnShootApiServer) FOUND Lease: (Name:%s,NameSpace:%s, Details: %s)\n\n", l.Name, l.Namespace, l)
+	}
+	fmt.Println("************END LeaseListing")
+	fmt.Println()
+
+	leaseName := "light-saber"
+	fmt.Printf("(createOrUpdateLeaseOnShootApiServer) GETTING lease by name: %s\n", leaseName)
+	lease, err := leaseIf.Get(ctx, leaseName, metav1.GetOptions{})
+	acquireTime := metav1.MicroTime{time.Now()}
+	if lease != nil {
+		fmt.Printf("(createOrUpdateLeaseOnShootApiServer) UPDATING EXISTING lease: (Name:%s), (Namespace: %s), (Details: %s)\n", lease.Name, lease.Namespace, lease)
+		lease.Name = leaseName
+		lease.Namespace = "kube-system"
+		lease.Spec.RenewTime = &acquireTime
+		lease, err := leaseIf.Update(ctx, lease, metav1.UpdateOptions{})
+		if err != nil {
+			return fmt.Errorf("(createOrUpdateLeaseOnShootApiServer) error updating lease: %w", err)
+		}
+		fmt.Printf("(createOrUpdateLeaseOnShootApiServer) UPDATED EXISTING lease: (Name:%s), (Namespace: %s), (Details: %s)\n", lease.Name, lease.Namespace, lease)
+		return nil
+	} else {
+		if !apierrors.IsNotFound(err) {
+			return err
+		}
+		fmt.Println("(createOrUpdateLeaseOnShootApiServer) CREATING Lease...")
+		lease, err = leaseIf.Create(ctx, &coordinationv1.Lease{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      leaseName,
+				Namespace: "kube-system",
+			},
+			Spec: coordinationv1.LeaseSpec{
+				HolderIdentity:       ptr.To("skywalker"),
+				LeaseDurationSeconds: ptr.To(int32(300)),
+				AcquireTime:          &acquireTime,
+				RenewTime:            &acquireTime,
+			},
+		}, metav1.CreateOptions{})
+		if err != nil {
+			return fmt.Errorf("(createOrUpdateLeaseOnShootApiServer) could not create lease: %w", err)
+		}
+		fmt.Printf("(createOrUpdateLeaseOnShootApiServer) CREATED Lease %s:%s:%s\n", lease.Name, lease.Namespace, lease)
+	}
+	return nil
 }
 
 func (s *server) triggerJobs() {
