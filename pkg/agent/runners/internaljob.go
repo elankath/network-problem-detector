@@ -7,6 +7,8 @@
 package runners
 
 import (
+	"fmt"
+	"runtime/debug"
 	"time"
 
 	"go.uber.org/atomic"
@@ -80,6 +82,12 @@ func (j *InternalJob) Tick(nodeName string, ch chan<- *nwpd.Observation) error {
 		j.lastRun.Store(&now)
 		go func() {
 			defer j.active.Store(false)
+			defer func() {
+				if v := recover(); v != nil {
+					fmt.Printf("Runner: %s stackTrace: %v", j.runner.Description(), debug.Stack())
+				}
+			}()
+			fmt.Println("Running Job for node: " + nodeName + " ,Job: " + j.runner.Description())
 			j.runner.Run(nodeName, ch)
 		}()
 	}

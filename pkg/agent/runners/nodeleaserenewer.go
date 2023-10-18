@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	coordinationv1 "k8s.io/api/coordination/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -55,6 +56,7 @@ func NewLeaseRenewer(nodes []config.Node, runnerConfig RunnerConfig, leasePrefix
 			config:    runnerConfig,
 		},
 		clientSetAccess: clientAccess,
+		log:             logrus.WithField("runner", leasePrefix+"lease-renewer"),
 	}
 	lr.runFunc = func(node config.Node) (result string, err error) {
 		return lr.renewLeaseFunc(node, leasePrefix)
@@ -65,11 +67,13 @@ func NewLeaseRenewer(nodes []config.Node, runnerConfig RunnerConfig, leasePrefix
 type leaseRenewer struct {
 	robinRound[config.Node]
 	clientSetAccess common.ClientsetBase
+	log             logrus.FieldLogger
 }
 
 var _ Runner = &leaseRenewer{}
 
 func (l *leaseRenewer) renewLeaseFunc(node config.Node, leasePrefix string) (string, error) {
+	fmt.Println("renewLeaseFunc invoked")
 	err := l.clientSetAccess.SetupClientSet()
 	if err != nil {
 		return "Failed to setup ClientSet for node lease renewal", err
@@ -81,14 +85,22 @@ func (l *leaseRenewer) renewLeaseFunc(node config.Node, leasePrefix string) (str
 
 	lease, err := l.getLease(ctx, common.NamespaceKubeSystem, leaseName)
 	if err != nil {
-		return fmt.Sprintf("Failed to get lease [Namespace: %s, Name: %s]", common.NamespaceKubeSystem, leaseName), err
+		msg := fmt.Sprintf("Failed to get lease [Namespace: %s, Name: %s] : %s", common.NamespaceKubeSystem, leaseName, err)
+		fmt.Println(msg)
+		l.log.Warn(msg)
+		return msg, err
 	}
 	if lease == nil {
-		return fmt.Sprintf("Lease [Namespace: %s, Name: %s] does not exist yet. Skipping renewal of lease", common.NamespaceKubeSystem, leaseName), nil
+		msg := fmt.Sprintf("Lease [Namespace: %s, Name: %s] does not exist yet. Skipping renewal of lease", common.NamespaceKubeSystem, leaseName)
+		fmt.Println(msg)
+		l.log.Info(msg)
+		return msg, nil
 	}
 	err = l.doRenewLease(ctx, lease)
 	if err != nil {
-		return fmt.Sprintf("Failed to renew lease [Namespace: %s, Name: %s]", common.NamespaceKubeSystem, leaseName), err
+		msg := fmt.Sprintf("Failed to renew lease [Namespace: %s, Name: %s] : %s", common.NamespaceKubeSystem, leaseName, err)
+		fmt.Println(msg)
+		return msg, err
 	}
 	return fmt.Sprintf("Successfully renewed lease: [Namespace: %s, Name: %s]", common.NamespaceKubeSystem, leaseName), nil
 }
