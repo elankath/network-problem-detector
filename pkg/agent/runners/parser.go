@@ -44,7 +44,7 @@ func GetNewRoot(ra *runnerArgs) *cobra.Command {
 	root.AddCommand(createCheckTCPPortCmd(ra))
 	root.AddCommand(createCheckHTTPSGetArgs(ra))
 	root.AddCommand(createNSLookupCmd(ra))
-	root.AddCommand(createLeaseRenewCmd(ra))
+	root.AddCommand(createRenewNodeLeaseCmd(ra))
 	return root
 }
 

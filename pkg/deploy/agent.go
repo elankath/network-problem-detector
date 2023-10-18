@@ -701,6 +701,10 @@ func (ac *AgentDeployConfig) BuildAgentConfig() (*config.AgentConfig, error) {
 					JobID: "nslookup-n",
 					Args:  []string{"nslookup", "--names", "eu.gcr.io.", "--scale-period"},
 				},
+				{
+					JobID: "dwd-renew-nodelease",
+					Args:  []string{"renewNodeLease", "--lease-prefix", "dwd-", "--period", "60s"},
+				},
 			},
 		},
 		PodNetwork: &config.NetworkConfig{
