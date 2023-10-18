@@ -7,6 +7,8 @@ package runners
 import (
 	"context"
 	"fmt"
+	clientset "k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/clientcmd"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -27,9 +29,11 @@ type nodeLeaseArgs struct {
 func (a *nodeLeaseArgs) createRunner(_ *cobra.Command, _ []string) error {
 	var nodes = a.runnerArgs.clusterCfg.Nodes
 	runnerConfig := a.runnerArgs.prepareConfig()
-	if r := NewLeaseRenewer(nodes, runnerConfig, a.leasePrefix); r != nil {
-		a.runnerArgs.runner = r
+	r, err := NewLeaseRenewer(nodes, runnerConfig, a.leasePrefix)
+	if err != nil {
+		return err
 	}
+	a.runnerArgs.runner = r
 	return nil
 }
 
@@ -44,40 +48,48 @@ func createRenewNodeLeaseCmd(ra *runnerArgs) *cobra.Command {
 	return cmd
 }
 
-func NewLeaseRenewer(nodes []config.Node, runnerConfig RunnerConfig, leasePrefix string) Runner {
+func NewLeaseRenewer(nodes []config.Node, runnerConfig RunnerConfig, leasePrefix string) (Runner, error) {
 	if len(nodes) == 0 {
-		return nil
+		return nil, nil
 	}
-	clientAccess := common.ClientsetBase{InCluster: true}
+	cfg, err := clientcmd.BuildConfigFromFlags("", "")
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		return nil, err
+	}
+	cfg.UserAgent = fmt.Sprintf("%s/%s", leasePrefix+"node-lease-renewer", "0.1")
+	clientSet, err := clientset.NewForConfig(cfg)
+
+	if err != nil {
+		fmt.Printf("Err: %v", err)
+		return nil, err
+	}
+	fmt.Println("NewLeaseRenewer: client creation successful")
 	lr := leaseRenewer{
 		robinRound: robinRound[config.Node]{
 			itemsName: "nodes",
 			items:     config.CloneAndShuffle(nodes),
 			config:    runnerConfig,
 		},
-		clientSetAccess: clientAccess,
-		log:             logrus.WithField("runner", leasePrefix+"lease-renewer"),
+		client: clientSet,
+		log:    logrus.WithField("runner", leasePrefix+"lease-renewer"),
 	}
 	lr.runFunc = func(node config.Node) (result string, err error) {
 		return lr.renewLeaseFunc(node, leasePrefix)
 	}
-	return &lr
+	return &lr, nil
 }
 
 type leaseRenewer struct {
 	robinRound[config.Node]
-	clientSetAccess common.ClientsetBase
-	log             logrus.FieldLogger
+	client *clientset.Clientset
+	log    logrus.FieldLogger
 }
 
 var _ Runner = &leaseRenewer{}
 
 func (l *leaseRenewer) renewLeaseFunc(node config.Node, leasePrefix string) (string, error) {
 	fmt.Println("renewLeaseFunc invoked")
-	err := l.clientSetAccess.SetupClientSet()
-	if err != nil {
-		return "Failed to setup ClientSet for node lease renewal", err
-	}
 	ctx, cancelFn := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelFn()
 
@@ -102,11 +114,12 @@ func (l *leaseRenewer) renewLeaseFunc(node config.Node, leasePrefix string) (str
 		fmt.Println(msg)
 		return msg, err
 	}
+	fmt.Println("Exiting without error from renewLeaseFunc")
 	return fmt.Sprintf("Successfully renewed lease: [Namespace: %s, Name: %s]", common.NamespaceKubeSystem, leaseName), nil
 }
 
 func (l *leaseRenewer) getLease(ctx context.Context, namespace, leaseName string) (*coordinationv1.Lease, error) {
-	leaseClient := l.clientSetAccess.Clientset.CoordinationV1().Leases(namespace)
+	leaseClient := l.client.CoordinationV1().Leases(namespace)
 	lease, err := leaseClient.Get(ctx, leaseName, metav1.GetOptions{})
 	if err != nil {
 		if errors.IsNotFound(err) {
@@ -114,6 +127,7 @@ func (l *leaseRenewer) getLease(ctx context.Context, namespace, leaseName string
 		}
 		return nil, err
 	}
+	fmt.Printf("getLease: Successfully got the lease %v\n", leaseName)
 	return lease, nil
 }
 
@@ -121,10 +135,11 @@ func (l *leaseRenewer) doRenewLease(ctx context.Context, lease *coordinationv1.L
 	leaseCopy := lease.DeepCopy()
 	leaseCopy.Spec.RenewTime = &metav1.MicroTime{Time: time.Now()}
 
-	leaseClient := l.clientSetAccess.Clientset.CoordinationV1().Leases(lease.Namespace)
+	leaseClient := l.client.CoordinationV1().Leases(lease.Namespace)
 	_, err := leaseClient.Update(ctx, leaseCopy, metav1.UpdateOptions{})
 	if err != nil {
 		return err
 	}
+	fmt.Printf("doRenewLease: Lease renewal successful for %v\n", leaseCopy.Name)
 	return nil
 }

@@ -87,7 +87,6 @@ func (j *InternalJob) Tick(nodeName string, ch chan<- *nwpd.Observation) error {
 					fmt.Printf("Runner: %s stackTrace: %v", j.runner.Description(), debug.Stack())
 				}
 			}()
-			fmt.Println("Running Job for node: " + nodeName + " ,Job: " + j.runner.Description())
 			j.runner.Run(nodeName, ch)
 		}()
 	}
